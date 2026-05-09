@@ -10,7 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="NModbus4" Version="2.1.0" />
+    <PackageReference Include="NModbus" Version="3.0.83" />
   </ItemGroup>
 
 </Project>

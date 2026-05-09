@@ -1,6 +1,4 @@
-﻿using Modbus.Data;
-using Modbus.Device;
-using Modbus_imitator.Model;
+﻿using NModbus;
 using System.Net;
 using System.Net.Sockets;
 
@@ -8,136 +6,144 @@ namespace ModbusTcpSimulator
 {
     class Program
     {
-        private static ModbusTcpSlave slave;
-        private static TcpListener listener;
-        private static bool isRunning = true;
-        private static bool isFloating = false;
-        private static Tank tank;
-        private static readonly ManualResetEvent shutdownEvent = new ManualResetEvent(false);
+        private static readonly List<ModbusTestUnit> _slaves = new();
 
-        static void Main(string[] args)
+        private static readonly ushort[] Capacities = { 5, 20, 15, 40 };
+        private static readonly ushort[] Flows = { 1, 2, 3,};
+
+        private static TcpListener _listener = null!;
+        private static IModbusSlaveNetwork _slaveNetwork = null!;
+        private static readonly CancellationTokenSource _cts = new();
+
+        static async Task Main(string[] args)
         {
             Console.WriteLine("=== Modbus TCP Сервер (симулятор устройства) ===");
-            Console.WriteLine("Запуск сервера на 127.0.0.1:502...\n");
+            Console.WriteLine("Запуск сервера на 127.0.0.1:502...");
             Console.WriteLine("Нажмите Ctrl+C для остановки сервера\n");
 
             Console.CancelKeyPress += (sender, e) =>
             {
                 e.Cancel = true;
-                isRunning = false;
                 Console.WriteLine("\nОстановка сервера...");
-                shutdownEvent.Set();
+                _cts.Cancel();
             };
 
             try
             {
-                tank = new Tank()
-                {
-                    Capacity = 85
-                };
+                InitializeServer();
 
-                listener = new TcpListener(IPAddress.Parse("127.0.0.1"), 502);
-                slave = ModbusTcpSlave.CreateTcp(1, listener);
-                slave.DataStore = DataStoreFactory.CreateDefaultDataStore();
+                var listenTask = _slaveNetwork.ListenAsync(_cts.Token);
+                var simulationTask = RunDataSimulationAsync(_cts.Token);
 
-                slave.ModbusSlaveRequestReceived += OnRequestReceived;
-                slave.WriteComplete += OnWriteComplete;
-
-                var updateThread = new Thread(UpdateDataSimulation)
-                {
-                    IsBackground = true
-                };
-                updateThread.Start();
-
-                Task.Run(() => RunModbusServer());
-
-                shutdownEvent.WaitOne();
-
-                Console.WriteLine("Сервер остановлен");
+                await Task.WhenAll(listenTask, simulationTask);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("Сервер остановлен.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Ошибка: {ex.Message}");
+                Console.WriteLine($"Критическая ошибка: {ex.Message}");
             }
-
-            Console.WriteLine("Нажмите любую клавишу для выхода...");
-            Console.ReadKey();
-        }
-
-        /// <summary>
-        /// Запуск Modbus Server
-        /// </summary>
-        static void RunModbusServer()
-        {
-            try
+            finally
             {
-                slave.Listen();
-                slave.DataStore.HoldingRegisters[1] = 0;
-                slave.DataStore.CoilDiscretes[1] = false;
-                slave.DataStore.CoilDiscretes[2] = false;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка в работе сервера: {ex.Message}");
-                shutdownEvent.Set();
+                Shutdown();
             }
         }
 
         /// <summary>
-        /// Фоновый поток для симуляции изменения данных
+        /// Инициализация Modbus TCP сервера и слейвов
         /// </summary>
-        static void UpdateDataSimulation()
+        private static void InitializeServer()
         {
-            while (isRunning)
+            _listener = new TcpListener(IPAddress.Parse("127.0.0.1"), 502);
+            _listener.Start();
+
+            var factory = new ModbusFactory();
+            _slaveNetwork = factory.CreateSlaveNetwork(_listener);
+
+            for (byte i = 1; i <= 3; i++)
+            {
+                var slave = factory.CreateSlave(i);
+
+                var testUnit = new ModbusTestUnit(
+                    i,
+                    slave,
+                    Capacities[i - 1],
+                    Flows[i - 1]);
+
+                _slaves.Add(testUnit);
+
+                _slaveNetwork.AddSlave(slave);
+
+                Console.WriteLine(
+                    $"Добавлен Slave ID={i} | Capacity={Capacities[i - 1]} | Flow={Flows[i - 1]}");
+            }
+
+            var lastSlave = factory.CreateSlave(4);
+            var lastTestUnit = new ModbusTestUnit(
+                4,
+                lastSlave,
+                Capacities[3]);
+
+            foreach (var unit in _slaves)
+            {
+                unit.SetReceiver(lastTestUnit.Tank);
+            }
+
+            _slaves.Add(lastTestUnit);
+            _slaveNetwork.AddSlave(lastSlave);
+
+            Console.WriteLine("\nСервер успешно запущен.\n");
+        }
+
+        /// <summary>
+        /// Фоновая симуляция обновления устройств
+        /// </summary>
+        private static async Task RunDataSimulationAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    if (isFloating)
+                    foreach (var slave in _slaves)
                     {
-                        tank.NowVolume += 2;
-                        slave.DataStore.HoldingRegisters[1] = tank.NowVolume;
-                        slave.DataStore.CoilDiscretes[1] = tank.IsLow;
-                        slave.DataStore.CoilDiscretes[2] = tank.IsHigh;
-
-                        if (tank.IsFull)
-                        {
-                            isFloating = false;
-                            slave.DataStore.CoilDiscretes[3] = false;
-                        }
+                        slave.Update();
+                        slave.PrintStatus();
                     }
-                    Thread.Sleep(5000);
+
+                    Console.WriteLine(new string('-', 70));
+
+                    await Task.Delay(5000, token);
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    if (isRunning)
-                        Console.WriteLine($"Ошибка обновления данных: {ex.Message}");
+                    Console.WriteLine($"Ошибка симуляции: {ex.Message}");
                 }
             }
         }
 
         /// <summary>
-        /// Обработчик события получения запроса от клиента
+        /// Корректная остановка сервера
         /// </summary>
-        static void OnRequestReceived(object sender, ModbusSlaveRequestEventArgs e)
+        private static void Shutdown()
         {
-            Console.WriteLine($"Получен запрос от клиента. " +
-                $"Unit ID: {e.Message.SlaveAddress}, " +
-                $"Function Code: {e.Message.FunctionCode}");
-        }
-
-        /// <summary>
-        /// Обработчик события завершения записи данных
-        /// </summary>
-        static void OnWriteComplete(object sender, ModbusSlaveRequestEventArgs e)
-        {
-            Console.WriteLine($"Запись данных завершена. " +
-                $"Function Code: {e.Message}");
-
-            if (!isFloating)
+            try
             {
-                isFloating = true;
-                slave.DataStore.CoilDiscretes[3] = true;
+                _slaveNetwork?.Dispose();
+                _listener?.Stop();
+                _cts.Dispose();
             }
+            catch
+            {
+                // Игнорируем ошибки при завершении
+            }
+
+            Console.WriteLine("Сервер завершил работу.");
         }
     }
 }
