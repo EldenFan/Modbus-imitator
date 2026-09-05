@@ -1,4 +1,4 @@
-﻿namespace ModbusImitator.Model
+﻿namespace Base.Models.Tanks
 {
     public class Tank
     {
@@ -28,10 +28,10 @@
             }
         }
         public ushort Flow { get; set; }
-        public ushort FillPercentage => (ushort)(Capacity == 0 ? 0 : (nowVolume / (double)Capacity) * 100);
+        public ushort FillPercentage => (ushort)(Capacity == 0 ? 0 : nowVolume / (double)Capacity * 100);
 
-        public bool IsHigh => nowVolume > 0 && (nowVolume / (double)Capacity >= 0.8);
-        public bool IsLow => nowVolume == 0 || (nowVolume / (double)Capacity <= 0.2);
+        public bool IsHigh => nowVolume > 0 && nowVolume / (double)Capacity >= 0.8;
+        public bool IsLow => nowVolume == 0 || nowVolume / (double)Capacity <= 0.2;
         public bool IsFull => Capacity == nowVolume;
         public bool IsEmpty => nowVolume == 0;
 

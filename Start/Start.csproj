@@ -1,19 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
-    <RootNamespace>Modbus_imitator</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="NModbus" Version="3.0.83" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\Base\Base.csproj" />
+    <ProjectReference Include="..\Modbus-imitator\ModbusImitator.csproj" />
+    <ProjectReference Include="..\OpcUaImitator\OpcUaImitator.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,197 +1,164 @@
-﻿using ModbusImitator.Model;
+﻿using Base.Models.Tanks;
 using NModbus;
 
-public class ModbusTestUnit
+namespace Modbus_imitator.ModbusSlave
 {
-    #region Fields
-    private Tank? receiver;
-
-    private readonly byte _id;
-    private readonly IModbusSlave _slave;
-    private readonly Tank _tank;
-
-    private readonly object _lock = new();
-
-    private bool _isFlowing;
-    private bool _isDrying;
-
-    /*
-        Карта регистров/coil:
-
-        Holding Registers:
-        HR0 - Текущий объем
-        HR1 - Процентный объем
-
-        Coils:
-        Coil0 - Low level
-        Coil1 - High level
-        Coil2 - Start filling
-        Coil3 - Start draining
-        Coil4 - Full
-    */
-    #endregion
-
-    #region Constructors
-    public ModbusTestUnit(byte unitId, IModbusSlave slave, ushort maxCapacity)
+    public class ModbusTestUnit
     {
-        _id = unitId;
-        _slave = slave ?? throw new ArgumentNullException(nameof(slave));
+        #region Fields
 
-        _tank = new Tank
+        private readonly byte id;
+        private readonly IModbusSlave slave;
+        private readonly TankSimulator tankSimulator;
+
+        private readonly object _lock = new();
+
+        /*
+            Карта регистров/coil:
+
+            Holding Registers:
+            HR0 - Текущий объем
+            HR1 - Процентный объем
+
+            Coils:
+            Coil0 - Low level
+            Coil1 - High level
+            Coil2 - Start filling
+            Coil3 - Start draining
+            Coil4 - Full
+        */
+        #endregion
+
+        #region Constructors
+        public ModbusTestUnit(byte unitId, IModbusSlave slave, TankSimulator tankSimulator)
         {
-            Capacity = maxCapacity,
-            NowVolume = 0
-        };
+            id = unitId;
+            this.slave = slave;
+            this.tankSimulator = tankSimulator;
 
-        InitializeDataStore();
-    }
-
-    public ModbusTestUnit(byte unitId, IModbusSlave slave, ushort maxCapacity, ushort flow) : this(unitId, slave, maxCapacity)
-    {
-        _tank.Flow = flow;
-    }
-
-    #endregion
-
-    #region Public Properties
-
-    public Tank Tank => _tank;
-
-    #endregion
-
-    #region Private Methods
-    /// <summary>
-    /// Инициализация начальных значений регистров и coil
-    /// </summary>
-    private void InitializeDataStore()
-    {
-        lock (_lock)
-        {
-            _slave.DataStore.HoldingRegisters.WritePoints(0, new ushort[]
-            {
-                _tank.NowVolume,
-                _tank.Capacity,
-                _tank.Flow
-            });
-
-            _slave.DataStore.CoilDiscretes.WritePoints(0, new bool[]
-            {
-                _tank.IsLow,   // Coil0
-                _tank.IsHigh,  // Coil1
-                false,         // Coil2 - Fill command
-                false,         // Coil3 - Drain command
-                _tank.IsFull   // Coil4
-            });
+            InitializeDataStore();
         }
-    }
 
-    /// <summary>
-    /// Синхронизация модели Tank с Modbus DataStore
-    /// </summary>
-    private void SyncDataStore()
-    {
-        _slave.DataStore.HoldingRegisters.WritePoints(0, new ushort[] { _tank.NowVolume, _tank.FillPercentage });
+        #endregion
 
-        _slave.DataStore.CoilDiscretes.WritePoints(0, new bool[]
+        #region Public Properties
+
+        public Tank Tank => tankSimulator.Tank;
+
+        public TankSimulator TankController => tankSimulator;
+
+        #endregion
+
+        #region Private Methods
+        /// <summary>
+        /// Инициализация начальных значений регистров и coil
+        /// </summary>
+        private void InitializeDataStore()
         {
-            _tank.IsLow,
-            _tank.IsHigh,
-            _isFlowing,
-            _isDrying,
-            _tank.IsFull
-        });
-    }
-
-    #endregion
-
-    #region Public Methods
-    /// <summary>
-    /// Вызывается внешним кодом после записи управляющих coil
-    /// </summary>
-    public void ProcessControlCommands()
-    {
-        lock (_lock)
-        {
-            bool startFill = _slave.DataStore.CoilDiscretes.ReadPoints(2, 1)[0];
-            bool startDrain = _slave.DataStore.CoilDiscretes.ReadPoints(3, 1)[0];
-
-            if (startFill && !_tank.IsFull)
+            lock (_lock)
             {
-                _isFlowing = true;
-                _isDrying = false;
-            }
+                slave.DataStore.HoldingRegisters.WritePoints(0,
+                [
+                    Tank.NowVolume,
+                    Tank.Capacity,
+                ]);
 
-            if (startDrain && !_tank.IsLow)
-            {
-                _isDrying = true;
-                _isFlowing = false;
+                slave.DataStore.CoilDiscretes.WritePoints(0,
+                [
+                    Tank.IsLow,   // Coil0
+                    Tank.IsHigh,  // Coil1
+                    false,         // Coil2
+                    false,         // Coil3
+                    Tank.IsFull   // Coil4
+                ]);
             }
-
-            _slave.DataStore.CoilDiscretes.WritePoints(2, new bool[] {false, false});
         }
-    }
 
-    /// <summary>
-    /// Обновление состояния резервуара
-    /// </summary>
-    public void Update()
-    {
-        lock (_lock)
+        /// <summary>
+        /// Синхронизация модели Tank с Modbus DataStore
+        /// </summary>
+        private void SyncDataStore()
         {
-            ProcessControlCommands();
+            slave.DataStore.HoldingRegisters.WritePoints(0, [Tank.NowVolume, Tank.FillPercentage]);
 
-            if (_isFlowing)
+            slave.DataStore.CoilDiscretes.WritePoints(0,
+            [
+                Tank.IsLow,
+                Tank.IsHigh,
+                tankSimulator.IsFlowing,
+                tankSimulator.IsDrying,
+                Tank.IsFull
+            ]);
+        }
+
+        #endregion
+
+        #region Public Methods
+        /// <summary>
+        /// Вызывается внешним кодом после записи управляющих coil
+        /// </summary>
+        public void ProcessControlCommands()
+        {
+            lock (_lock)
             {
-                _tank.AddWater();
+                bool startFill = slave.DataStore.CoilDiscretes.ReadPoints(2, 1)[0];
+                bool startDrain = slave.DataStore.CoilDiscretes.ReadPoints(3, 1)[0];
 
-                if (_tank.IsFull)
+                if (startFill)
                 {
-                    _isFlowing = false;
+                    tankSimulator.StartFilling();
                 }
-            }
 
-            if (_isDrying)
-            {
-                var flowingWater = _tank.RemoveWater();
-
-                receiver?.AddWater(flowingWater);
-
-                if (_tank.IsEmpty)
+                if (startDrain)
                 {
-                    _isDrying = false;
+                    tankSimulator.StartDraining();
                 }
+
+                slave.DataStore.CoilDiscretes.WritePoints(2, [false, false]);
             }
-
-            SyncDataStore();
         }
-    }
 
-    /// <summary>
-    /// Лог состояния устройства
-    /// </summary>
-    public void PrintStatus()
-    {
-        lock (_lock)
+        /// <summary>
+        /// Обновление состояния резервуара
+        /// </summary>
+        public void Update()
         {
-            Console.WriteLine(
-                $"[Slave {_id}] " +
-                $"Volume: {_tank.NowVolume}/{_tank.Capacity}, " +
-                $"Flow: {_tank.Flow}, " +
-                $"Low: {_tank.IsLow}, " +
-                $"High: {_tank.IsHigh}, " +
-                $"Filling: {_isFlowing}, " +
-                $"Draining: {_isDrying}"
-            );
-        }
-    }
+            lock (_lock)
+            {
+                ProcessControlCommands();
 
-    /// <summary>
-    /// Установление приемного бака
-    /// </summary>
-    /// <param name="receiver"></param>
-    public void SetReceiver(Tank receiver)
-    {
-        this.receiver = receiver;
+                tankSimulator.Update();
+
+                SyncDataStore();
+            }
+        }
+
+        /// <summary>
+        /// Лог состояния устройства
+        /// </summary>
+        public string PrintStatus()
+        {
+            lock (_lock)
+            {
+                return
+                    $"[Slave {id}] " +
+                    $"Volume: {Tank.NowVolume}/{Tank.Capacity}, " +
+                    $"Flow: {Tank.Flow}, " +
+                    $"Low: {Tank.IsLow}, " +
+                    $"High: {Tank.IsHigh}, " +
+                    $"Filling: {tankSimulator.IsFlowing}, " +
+                    $"Draining: {tankSimulator.IsDrying}";
+            }
+        }
+
+        /// <summary>
+        /// Установление приемного бака
+        /// </summary>
+        /// <param name="receiver"></param>
+        public void SetReceiver(ModbusTestUnit receiver)
+        {
+            tankSimulator.SetReceiver(receiver.TankController);
+        }
+        #endregion
     }
-    #endregion
 }
